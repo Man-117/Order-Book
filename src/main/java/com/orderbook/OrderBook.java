@@ -401,7 +401,7 @@ public final class OrderBook {
 
             MatchResult matchResult = level.match(order);
             for (Trade trade : matchResult.trades()) {
-                filled -= trade.quantity();
+                filled += trade.quantity();
             }
             tradesToProcess.addAll(matchResult.trades());
             if (matchResult.cancelTaker()) return filled;

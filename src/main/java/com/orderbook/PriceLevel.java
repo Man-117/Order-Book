@@ -75,14 +75,12 @@ public final class PriceLevel {
     MatchResult match(MarketOrderOnBook taker) {
         List<Trade> trades = new ArrayList<>();
         boolean cancelTaker = false;
-        long filled = 0;
-        long requestedQty = taker.getOrderInfo()
-                .quantity();
+
         Iterator<Map.Entry<UUID, OrderOnBook>> it = orders.entrySet()
                 .iterator();
 
         iterate_orders:
-        while (it.hasNext() && requestedQty > 0) {
+        while (it.hasNext() && !taker.fullFilled()) {
             Map.Entry<UUID, OrderOnBook> entry = it.next();
             OrderOnBook maker = entry.getValue();
 
@@ -108,9 +106,13 @@ public final class PriceLevel {
                 }
             }
 
-            long matchQty = Math.min(requestedQty, maker.generalOrderInfo()
-                    .quantity());
-            filled += matchQty;
+            long matchQty = Math.min(taker.remainingQuantity(), maker.remainingQuantity());
+            maker.fill(matchQty);
+            taker.fill(matchQty);
+            if (maker.fullFilled()) {
+                orders.remove(maker.generalOrderInfo()
+                        .id());
+            }
             trades.add(new Trade(price, matchQty, taker.getOrderInfo()
                     .id(), maker.generalOrderInfo()
                     .id(), maker.snapShot(), taker.snapShot(price), CommonUtil.now()));

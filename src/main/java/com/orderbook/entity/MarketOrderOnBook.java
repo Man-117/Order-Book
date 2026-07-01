@@ -16,4 +16,19 @@ public class MarketOrderOnBook {
     public GeneralOrderInfo getOrderInfo() {
         return orderInfo;
     }
+
+    public void fill(long quantity) {
+        filled += quantity;
+        if (filled > orderInfo.quantity()) {
+            throw new RuntimeException("overfilled!");
+        }
+    }
+
+    public boolean fullFilled() {
+        return filled == orderInfo.quantity();
+    }
+
+    public long remainingQuantity() {
+        return orderInfo.quantity() - filled;
+    }
 }

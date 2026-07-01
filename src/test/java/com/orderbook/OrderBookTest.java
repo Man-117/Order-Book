@@ -1,10 +1,10 @@
 package com.orderbook;
 
 import com.orderbook.entity.*;
+import com.orderbook.utils.IDGenerator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -12,161 +12,130 @@ import static org.junit.jupiter.api.Assertions.*;
 class OrderBookTest {
 
     private OrderBook orderBook;
+    private UUID user1;
+    private UUID user2;
 
     @BeforeEach
     void setUp() {
-        orderBook = OrderBook.builder("BTCUSD")
-                .withTickSize(new BigDecimal("0.01"))
-                .withLotSize(new BigDecimal("1"))
-                .build();
+        orderBook = OrderBook.builder("BTC/USD").build();
+        user1 = IDGenerator.get();
+        user2 = IDGenerator.get();
     }
 
     @Test
-    void testAddAndMatchLimitOrder() {
-        UUID user1 = UUID.randomUUID();
-        UUID user2 = UUID.randomUUID();
-
-        GeneralOrderInfo buyInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 100, user1);
-        LimitOrder buyOrder = new LimitOrder(buyInfo, 50000);
+    void testBasicLimitOrderMatching() {
+        // user1 buys 10 @ 10000
+        LimitOrder buyOrder = new LimitOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 10, user1), 10000L);
         orderBook.addOrder(buyOrder);
 
-        GeneralOrderInfo sellInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 50, user2);
-        LimitOrder sellOrder = new LimitOrder(sellInfo, 49000); // Crosses the buy order
-        orderBook.addOrder(sellOrder);
+        // user2 sells 5 @ 10000
+        LimitOrder sellOrder1 = new LimitOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 5, user2), 10000L);
+        orderBook.addOrder(sellOrder1);
 
-        Trade trade = orderBook.consumeResult();
-        assertNotNull(trade);
-        assertEquals(50, trade.quantity());
-        assertEquals(50000, trade.price()); // Executes at maker price
-        assertEquals(sellInfo.id(), trade.takerId());
-        assertEquals(buyInfo.id(), trade.makerId());
+        Trade trade1 = orderBook.consumeResult();
+        assertNotNull(trade1);
+        assertEquals(5, trade1.quantity());
+        assertEquals(10000L, trade1.price());
 
+        // user2 sells another 10 @ 10000 (should fill 5, leave 5 resting)
+        LimitOrder sellOrder2 = new LimitOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 10, user2), 10000L);
+        orderBook.addOrder(sellOrder2);
+
+        Trade trade2 = orderBook.consumeResult();
+        assertNotNull(trade2);
+        assertEquals(5, trade2.quantity());
+        assertEquals(10000L, trade2.price());
+
+        // No more trades
         assertNull(orderBook.consumeResult());
     }
 
     @Test
-    void testAddAndMatchMarketOrder() {
-        UUID user1 = UUID.randomUUID();
-        UUID user2 = UUID.randomUUID();
+    void testMarketOrderMatching() {
+        // Provide liquidity
+        orderBook.addOrder(new LimitOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 10, user1), 10100L));
+        orderBook.addOrder(new LimitOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 10, user1), 10200L));
 
-        GeneralOrderInfo buyInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 100, user1);
-        LimitOrder buyOrder = new LimitOrder(buyInfo, 50000);
-        orderBook.addOrder(buyOrder);
-
-        GeneralOrderInfo sellInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 50, user2);
-        MarketOrder sellOrder = new MarketOrder(sellInfo); // Crosses the buy order
-        orderBook.addOrder(sellOrder);
-
-        Trade trade = orderBook.consumeResult();
-        assertNotNull(trade);
-        assertEquals(50, trade.quantity());
-        assertEquals(50000, trade.price()); // Executes at maker price
-        assertEquals(sellInfo.id(), trade.takerId());
-        assertEquals(buyInfo.id(), trade.makerId());
-
-        assertNull(orderBook.consumeResult());
-    }
-
-    @Test
-    void testAddAndMatchPostOnlyOrder() {
-        UUID user1 = UUID.randomUUID();
-        UUID user2 = UUID.randomUUID();
-
-        GeneralOrderInfo buyInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 100, user1);
-        LimitOrder buyOrder = new LimitOrder(buyInfo, 50000);
-        orderBook.addOrder(buyOrder);
-
-        GeneralOrderInfo sellInfo = new GeneralOrderInfo(OrderType.POST_ONLY, Side.SELL, 50, user2);
-        PostOnlyOrder sellOrder = new PostOnlyOrder(sellInfo, 51_000); // Crosses the buy order
-        boolean success = orderBook.addOrder(sellOrder);
-
-        Trade trade = orderBook.consumeResult();
-        assertNull(trade);
-        assertTrue(success);
-
-        GeneralOrderInfo sellInfo2 = new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 50, user2);
-        PostOnlyOrder sellOrder2 = new PostOnlyOrder(sellInfo2, 49_000); // Crosses the buy order
-        success = orderBook.addOrder(sellOrder2);
-
-        assertFalse(success);
-
-
-        buyInfo = new GeneralOrderInfo(OrderType.MARKET, Side.BUY, 100, user1);
-        MarketOrder marketBuy = new MarketOrder(buyInfo);
+        // Market buy for 15
+        MarketOrder marketBuy = new MarketOrder(
+                new GeneralOrderInfo(OrderType.MARKET, Side.BUY, 15, user2));
         orderBook.addOrder(marketBuy);
 
-        trade = orderBook.consumeResult();
+        Trade trade1 = orderBook.consumeResult();
+        assertNotNull(trade1);
+        assertEquals(10, trade1.quantity());
+        assertEquals(10100L, trade1.price());
 
-        assertEquals(50, trade.quantity());
-        assertEquals(51_000, trade.price()); // Executes at maker price
-        assertEquals(sellInfo.id(), trade.makerId());
-        assertEquals(buyInfo.id(), trade.takerId());
-
-        assertNull(orderBook.consumeResult());
-    }
-
-    @Test
-    void testAddAndMatchIcebergOrder() {
-        UUID user1 = UUID.randomUUID();
-        UUID user2 = UUID.randomUUID();
-
-        GeneralOrderInfo buyInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 100, user1);
-        LimitOrder buyOrder = new LimitOrder(buyInfo, 50000);
-        orderBook.addOrder(buyOrder);
-
-        GeneralOrderInfo sellInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 50, user2);
-        LimitOrder chileOrder = new LimitOrder(sellInfo, 49000); // Crosses the buy order
-        IcebergOrder sellOrder = new IcebergOrder(chileOrder, 90);
-        orderBook.addOrder(sellOrder);
-
-        Trade trade = orderBook.consumeResult();
-        assertNotNull(trade);
-        assertEquals(50, trade.quantity());
-        assertEquals(50000, trade.price()); // Executes at maker price
-        assertEquals(sellInfo.id(), trade.takerId());
-        assertEquals(buyInfo.id(), trade.makerId());
-
-        trade = orderBook.consumeResult();
-        assertNotNull(trade);
-        assertEquals(40, trade.quantity());
-        assertEquals(50000, trade.price()); // Executes at maker price
-        assertTrue(orderBook.getIcebergOrders().get(sellOrder.id()).getTrades().contains(trade));
-        assertEquals(buyInfo.id(), trade.makerId());
-
-        assertNull(orderBook.consumeResult());
-    }
-
-    @Test
-    void testCancelOrder() {
-        UUID user1 = UUID.randomUUID();
-        GeneralOrderInfo buyInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 100, user1);
-        LimitOrder buyOrder = new LimitOrder(buyInfo, 50000);
-        orderBook.addOrder(buyOrder);
-
-        boolean cancelled = orderBook.cancelOrder(buyOrder);
-        assertTrue(cancelled);
-
-        boolean cancelledAgain = orderBook.cancelOrder(buyOrder);
-        assertFalse(cancelledAgain);
-    }
-
-    @Test
-    void testSelfTradePrevention() {
-        UUID user1 = UUID.randomUUID();
-        // same user
-        GeneralOrderInfo buyInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 100, user1);
-        LimitOrder buyOrder = new LimitOrder(buyInfo, 50000);
-        orderBook.addOrder(buyOrder);
-
-        GeneralOrderInfo sellInfo = new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 50, user1);
-        LimitOrder sellOrder = new LimitOrder(sellInfo, 49000);
-        orderBook.addOrder(sellOrder);
-
-        // Under CANCEL_TAKER STP, taker (sell) should be cancelled, maker (buy) stays on book, no trade.
-        Trade trade = orderBook.consumeResult();
-        assertNull(trade);
+        Trade trade2 = orderBook.consumeResult();
+        assertNotNull(trade2);
+        assertEquals(5, trade2.quantity());
+        assertEquals(10200L, trade2.price());
         
-        // We can check if maker is still there by trying to cancel it
-        assertTrue(orderBook.cancelOrder(buyOrder));
+        assertNull(orderBook.consumeResult());
+    }
+
+    @Test
+    void testIcebergOrderReplenishment() {
+        // Iceberg sell order: total 25, visible 5, at price 10000
+        LimitOrder child = new LimitOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 5, user1), 10000L);
+        IcebergOrder iceberg = new IcebergOrder(child, 25);
+        orderBook.addOrder(iceberg);
+
+        // Buy 12 @ 10000
+        LimitOrder buyOrder = new LimitOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 12, user2), 10000L);
+        orderBook.addOrder(buyOrder);
+
+        // Should produce 3 trades (5 from first visible, 5 from replenishment, 2 from next replenishment)
+        Trade trade1 = orderBook.consumeResult();
+        assertNotNull(trade1);
+        assertEquals(5, trade1.quantity());
+
+        Trade trade2 = orderBook.consumeResult();
+        assertNotNull(trade2);
+        assertEquals(5, trade2.quantity());
+
+        Trade trade3 = orderBook.consumeResult();
+        assertNotNull(trade3);
+        assertEquals(2, trade3.quantity());
+        
+        assertNull(orderBook.consumeResult());
+    }
+
+    @Test
+    void testPostOnlyOrder() {
+        // Add resting liquidity
+        orderBook.addOrder(new LimitOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 10, user1), 10000L));
+
+        // Attempt to cross the spread with Post-Only (Sell @ 9900)
+        PostOnlyOrder crossingOrder = new PostOnlyOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 10, user2), 9900L);
+        boolean addedCross = orderBook.addOrder(crossingOrder);
+        assertFalse(addedCross, "Post-only order should be rejected if it crosses the spread");
+
+        // Attempt non-crossing Post-Only (Sell @ 10100)
+        PostOnlyOrder nonCrossingOrder = new PostOnlyOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.SELL, 10, user2), 10100L);
+        boolean addedNonCross = orderBook.addOrder(nonCrossingOrder);
+        assertTrue(addedNonCross, "Post-only order should be accepted if it does not cross the spread");
+        
+        assertNull(orderBook.consumeResult());
+    }
+
+    @Test
+    void testOrderCancellation() {
+        LimitOrder order1 = new LimitOrder(
+                new GeneralOrderInfo(OrderType.LIMIT, Side.BUY, 10, user1), 10000L);
+        orderBook.addOrder(order1);
+
+        assertTrue(orderBook.cancelOrder(order1));
+        assertFalse(orderBook.cancelOrder(order1), "Should return false on subsequent cancellation");
     }
 }

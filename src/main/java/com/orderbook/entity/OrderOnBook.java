@@ -12,6 +12,9 @@ public class OrderOnBook {
 
     public void fill(long quantity) {
         filled += quantity;
+        if (filled > generalOrderInfo.quantity()) {
+            throw new RuntimeException("overfilled!");
+        }
     }
 
     public GeneralOrderInfo generalOrderInfo() {
@@ -35,6 +38,10 @@ public class OrderOnBook {
     }
     public OrderSnapShot snapShot() {
         return new OrderSnapShot(generalOrderInfo, price, filled);
+    }
+
+    public long remainingQuantity() {
+        return generalOrderInfo.quantity() - filled;
     }
 
 }
