@@ -15,6 +15,10 @@ public final class Converter {
         return new IcebergOrderOnBook(order.id(), order.childOrder(), order.totalQuantity());
     }
 
+    public static MarketOrderOnBook toOrderOnBook(MarketOrder order) {
+        return new MarketOrderOnBook(order.generalOrderInfo());
+    }
+
     public static GeneralOrderInfo clone(GeneralOrderInfo orderInfo) {
         return new GeneralOrderInfo(IDGenerator.get(), orderInfo.type(), orderInfo.side(), orderInfo.quantity(), orderInfo.userId(), CommonUtil.now());
     }

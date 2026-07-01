@@ -6,7 +6,6 @@ import com.orderbook.utils.Converter;
 import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.TimeUnit;
 
 /**
  * High-performance limit order book with price-time priority matching.
@@ -43,8 +42,10 @@ public final class OrderBook {
     private final SortedMap<Long, PriceLevel> bids = new TreeMap<>(Comparator.reverseOrder());
     private final SortedMap<Long, PriceLevel> asks = new TreeMap<>();
     private final Map<UUID, IcebergOrderOnBook> icebergOrders = new HashMap<>();
+    private final Map<UUID, UUID> childToIceberg = new HashMap<>();
     private final ConcurrentLinkedQueue<Trade> trades = new ConcurrentLinkedQueue<>();
     private final Queue<Trade> tradesToProcess = new LinkedList<>();
+
 
     // -----------------------------------------------------------------------
     // Configuration (immutable)
@@ -128,24 +129,18 @@ public final class OrderBook {
 
     public <T> void addOrder(MarketOrder order) {
         preProcess(order.generalOrderInfo());
-        orderPreProcess(order);
+        MarketOrderOnBook orderOnBook = orderPreProcess(order);
 
-        orderTake(order);
+        orderTake(orderOnBook);
 
         orderAfterProcess(order);
         afterProcess(order.generalOrderInfo());
     }
 
     public void addOrder(IcebergOrder order) {
-        preProcess(order.childOrder()
-                .generalOrderInfo());
-        OrderOnBook orderOnBook = orderPreProcess(order);
-
-        orderTake(orderOnBook);
-
-        orderAfterProcess(order);
-        afterProcess(order.childOrder()
-                .generalOrderInfo());
+        IcebergOrderOnBook parent = orderPreProcess(order);
+        addOrder(order.childOrder());
+        orderAfterProcess(parent);
     }
 
     public boolean addOrder(PostOnlyOrder order) {
@@ -159,6 +154,7 @@ public final class OrderBook {
         return true;
     }
 
+
     private void preProcess(GeneralOrderInfo generalOrderInfo) {
         validateOrder(generalOrderInfo);
     }
@@ -171,8 +167,8 @@ public final class OrderBook {
     }
 
 
-    private void orderPreProcess(MarketOrder order) {
-
+    private MarketOrderOnBook orderPreProcess(MarketOrder order) {
+        return Converter.toOrderOnBook(order);
     }
 
     private OrderOnBook orderPreProcess(PostOnlyOrder order) {
@@ -187,8 +183,7 @@ public final class OrderBook {
         return Converter.toOrderOnBook(order);
     }
 
-    private OrderOnBook orderPreProcess(IcebergOrder order) {
-        OrderOnBook orderOnBook = orderPreProcess(order.childOrder());
+    private IcebergOrderOnBook orderPreProcess(IcebergOrder order) {
         if (order.totalQuantity() <= order.childOrder()
                 .generalOrderInfo()
                 .quantity())
@@ -197,21 +192,47 @@ public final class OrderBook {
 
 
         IcebergOrderOnBook parent = Converter.toOrderOnBook(order);
-        icebergOrders.put(order.childOrder()
+        icebergOrders.put(parent.getId(), parent);
+        childToIceberg.put(parent.getChildOrder()
                 .generalOrderInfo()
-                .id(), parent);
-        return orderOnBook;
+                .id(), parent.getId());
+        return parent;
     }
 
     private void afterProcess(GeneralOrderInfo generalOrderInfo) {
+
         while (!tradesToProcess.isEmpty()) {
             Trade trade = tradesToProcess.poll();
-            replenishIfNecessary(trade.makerSnapShot());
             trades.add(trade);
+
+            OrderSnapShot makerSnapshot = trade.makerSnapShot();
+            OrderSnapShot takerSnapshot = trade.takerSnapShot();
+            UUID makerParentId = childToIceberg.get(makerSnapshot.generalOrderInfo()
+                    .id());
+            UUID takerParentId = childToIceberg.get(takerSnapshot.generalOrderInfo()
+                    .id());
+            if (makerParentId != null) {
+                icebergOrders.get(makerParentId)
+                        .addTrade(trade);
+                if (makerSnapshot.fullFilled()) {
+                    replenishIfNecessary(makerSnapshot);
+                }
+            }
+            if (takerParentId != null) {
+                icebergOrders.get(takerParentId)
+                        .addTrade(trade);
+                if (takerSnapshot.fullFilled()) {
+                    replenishIfNecessary(takerSnapshot);
+                }
+            }
         }
     }
 
+    /*  private void orderAfterProcess(OrderOnBook order) {
+          replenishIfNecessary(new OrderSnapShot(order.generalOrderInfo(), order.price(), order.filled()));
+      }*/
     private void orderAfterProcess(LimitOrder order) {
+
         System.out.println("Limit order processed");
     }
 
@@ -219,7 +240,8 @@ public final class OrderBook {
         System.out.println("Post only order process");
     }
 
-    private void orderAfterProcess(IcebergOrder order) {
+    private void orderAfterProcess(IcebergOrderOnBook order) {
+
         System.out.println("Iceberg order processed");
     }
 
@@ -323,8 +345,6 @@ public final class OrderBook {
      */
     private void orderTake(OrderOnBook order) {
 
-        long remaining = order.generalOrderInfo()
-                .quantity();
         SortedMap<Long, PriceLevel> oppositeBook = order.generalOrderInfo()
                 .side() == Side.BUY ? asks : bids;
 
@@ -348,11 +368,12 @@ public final class OrderBook {
                     .isEmpty()) {
                 break;
             }
-            long postpone = TimeUnit.SECONDS.toMillis(1);
             tradesToProcess.addAll(matchResult.trades());
             if (matchResult.cancelTaker()) return;
         }
-        placeOrder(order);
+        if (!order.fullFilled()) {
+            placeOrder(order);
+        }
     }
 
     private void placeOrder(OrderOnBook order) {
@@ -367,11 +388,10 @@ public final class OrderBook {
 
     }
 
-    private void orderTake(MarketOrder order) {
+    private long orderTake(MarketOrderOnBook order) {
 
-        long remaining = order.generalOrderInfo()
-                .quantity();
-        SortedMap<Long, PriceLevel> oppositeBook = order.generalOrderInfo()
+        long filled = 0;
+        SortedMap<Long, PriceLevel> oppositeBook = order.getOrderInfo()
                 .side() == Side.BUY ? asks : bids;
 
         Set<Map.Entry<Long, PriceLevel>> entries = oppositeBook.entrySet();
@@ -380,30 +400,31 @@ public final class OrderBook {
             PriceLevel level = entry.getValue();
 
             MatchResult matchResult = level.match(order);
-            long postpone = TimeUnit.SECONDS.toMillis(1);
-            while (!tradesToProcess.addAll(matchResult.trades())) {
-                try {
-                    Thread.sleep(postpone);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
-                postpone += postpone * 2;
+            for (Trade trade : matchResult.trades()) {
+                filled -= trade.quantity();
             }
-            if (matchResult.cancelTaker()) return;
+            tradesToProcess.addAll(matchResult.trades());
+            if (matchResult.cancelTaker()) return filled;
         }
+        return filled;
     }
 
     private void replenishIfNecessary(OrderSnapShot snapShot) {
-        if (snapShot.filled() != snapShot.generalOrderInfo()
-                .quantity()) {
-            return;
-        }
-        IcebergOrderOnBook icebergOrder = icebergOrders.get(snapShot.generalOrderInfo()
-                .id());
+        UUID childId = snapShot.generalOrderInfo()
+                .id();
+        UUID parentId = childToIceberg.get(childId);
+        IcebergOrderOnBook icebergOrder = icebergOrders.get(parentId);
         if (icebergOrder == null) {
             return;
         }
-        addOrder(icebergOrder.replenish());
+        LimitOrder newOrder = icebergOrder.replenish();
+        childToIceberg.put(newOrder.generalOrderInfo()
+                .id(), icebergOrder.getId());
+        addOrder(newOrder);
+    }
+
+    public Map<UUID, IcebergOrderOnBook> getIcebergOrders() {
+        return icebergOrders;
     }
 
     // -----------------------------------------------------------------------

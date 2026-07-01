@@ -3,11 +3,14 @@ package com.orderbook.entity;
 import com.orderbook.utils.CommonUtil;
 import com.orderbook.utils.IDGenerator;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 public final class IcebergOrderOnBook {
     private final UUID id;
     private LimitOrder childOrder;
+    private final List<Trade> trades=new ArrayList<>();
     private long remainingQuantity;
 
     public IcebergOrderOnBook(UUID id, LimitOrder childOrder, long remainingQuantity) {
@@ -25,6 +28,14 @@ public final class IcebergOrderOnBook {
         GeneralOrderInfo newInfo = new GeneralOrderInfo(IDGenerator.get(), childInfo.type(), childInfo.side(), quantity, childInfo.userId(), CommonUtil.now());
         childOrder = new LimitOrder(newInfo, childOrder.price());
         return childOrder;
+    }
+
+    public List<Trade> getTrades() {
+        return trades;
+    }
+
+    public void addTrade(Trade trades) {
+        this.trades.add(trades);
     }
 
     public UUID getId() {

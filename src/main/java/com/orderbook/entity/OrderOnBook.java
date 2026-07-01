@@ -26,6 +26,13 @@ public class OrderOnBook {
         return filled;
     }
 
+    public long remainder() {
+        return generalOrderInfo.quantity() - filled;
+    }
+
+    public boolean fullFilled() {
+        return generalOrderInfo.quantity() == filled;
+    }
     public OrderSnapShot snapShot() {
         return new OrderSnapShot(generalOrderInfo, price, filled);
     }

@@ -1,7 +1,7 @@
 package com.orderbook;
 
 import com.orderbook.config.Config;
-import com.orderbook.entity.MarketOrder;
+import com.orderbook.entity.MarketOrderOnBook;
 import com.orderbook.entity.MatchResult;
 import com.orderbook.entity.OrderOnBook;
 import com.orderbook.entity.Trade;
@@ -28,14 +28,11 @@ public final class PriceLevel {
     MatchResult match(OrderOnBook taker) {
         List<Trade> trades = new ArrayList<>();
         boolean cancelTaker = false;
-        long filled = 0;
-        long requestedQty = taker.generalOrderInfo()
-                .quantity();
         Iterator<Map.Entry<UUID, OrderOnBook>> it = orders.entrySet()
                 .iterator();
 
         iterate_orders:
-        while (it.hasNext() && requestedQty > 0) {
+        while (it.hasNext() && !taker.fullFilled()) {
             Map.Entry<UUID, OrderOnBook> entry = it.next();
             OrderOnBook maker = entry.getValue();
 
@@ -61,22 +58,25 @@ public final class PriceLevel {
                 }
             }
 
-            long matchQty = Math.min(requestedQty, maker.generalOrderInfo()
-                    .quantity());
+            long matchQty = Math.min(taker.remainder(), maker.remainder());
+            taker.fill(matchQty);
+            maker.fill(matchQty);
+            if (maker.fullFilled()) {
+                orders.remove(maker.generalOrderInfo()
+                        .id());
+            }
             trades.add(new Trade(price, matchQty, taker.generalOrderInfo()
                     .id(), maker.generalOrderInfo()
-                    .id(), maker.snapShot(), CommonUtil.now()));
-
-
+                    .id(), maker.snapShot(), taker.snapShot(), CommonUtil.now()));
         }
         return new MatchResult(taker, trades, cancelTaker);
     }
 
-    MatchResult match(MarketOrder taker) {
+    MatchResult match(MarketOrderOnBook taker) {
         List<Trade> trades = new ArrayList<>();
         boolean cancelTaker = false;
         long filled = 0;
-        long requestedQty = taker.generalOrderInfo()
+        long requestedQty = taker.getOrderInfo()
                 .quantity();
         Iterator<Map.Entry<UUID, OrderOnBook>> it = orders.entrySet()
                 .iterator();
@@ -87,7 +87,7 @@ public final class PriceLevel {
             OrderOnBook maker = entry.getValue();
 
             // Self-trade prevention
-            STPDecision stp = checkStp(taker.generalOrderInfo()
+            STPDecision stp = checkStp(taker.getOrderInfo()
                     .userId(), maker.generalOrderInfo()
                     .userId());
             switch (stp) {
@@ -111,13 +111,13 @@ public final class PriceLevel {
             long matchQty = Math.min(requestedQty, maker.generalOrderInfo()
                     .quantity());
             filled += matchQty;
-            trades.add(new Trade(price, matchQty, taker.generalOrderInfo()
+            trades.add(new Trade(price, matchQty, taker.getOrderInfo()
                     .id(), maker.generalOrderInfo()
-                    .id(), maker.snapShot(), CommonUtil.now()));
+                    .id(), maker.snapShot(), taker.snapShot(price), CommonUtil.now()));
 
 
         }
-        return new MatchResult(new OrderOnBook(taker.generalOrderInfo(), price), trades, cancelTaker);
+        return new MatchResult(new OrderOnBook(taker.getOrderInfo(), price), trades, cancelTaker);
     }
     // -----------------------------------------------------------------------
     // Accessors
